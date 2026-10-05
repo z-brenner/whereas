@@ -161,6 +161,8 @@ export interface TemplateDefinition {
   groups: Group[];
   anchors: Anchor[];
   signers: SignerRole[];
+  /** Tasks added to every request made from this template. */
+  tasks?: string[];
 }
 
 export type Scalar = string | number | boolean | null;

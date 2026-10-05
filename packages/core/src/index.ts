@@ -19,3 +19,4 @@ export {
 export type { ParaProps, RunProps } from './styles';
 export { findText, blockRange } from './locate';
 export { sampleDefinition, sampleAnswers } from './sample';
+export { reanchor } from './reanchor';

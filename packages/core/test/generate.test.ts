@@ -92,6 +92,23 @@ describe.each(variants)('generation from %s', (file) => {
     expect(() => generateDocx(template, def, answers)).not.toThrow();
   });
 
+  it('ignores a stale answer to a question that is no longer asked', () => {
+    // "health" was ticked, then the requester said no personal data is involved.
+    const answers: Answers = { ...sampleAnswers, personal_data: false, data_categories: ['health'] };
+    const def2 = {
+      ...def,
+      anchors: def.anchors.map((a) =>
+        a.id === 'c_dpa' ? { ...a, when: { field: 'data_categories', op: 'contains' as const, value: 'health' } } : a,
+      ),
+    };
+    const withData = textOf(generateDocx(template, def2, { ...answers, personal_data: true })).join('\n');
+    expect(withData).toContain('Data Processing Addendum');
+    const kept = def2.anchors.filter((a) => a.id !== 'c_data');
+    const text = textOf(generateDocx(template, { ...def2, anchors: kept }, answers)).join('\n');
+    expect(text).toContain('Data Protection.');
+    expect(text).not.toContain('Data Processing Addendum');
+  });
+
   it('writes provider signature tags and leaves no working markers behind', () => {
     const out = generateDocx(template, def, sampleAnswers, { signatureTag: signatureTagFor('docuseal') });
     const text = textOf(out).join('\n');

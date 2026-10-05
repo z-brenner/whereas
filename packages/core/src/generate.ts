@@ -2,7 +2,7 @@ import { blockUnits, removeUnit } from './blocks';
 import { cloneDocx, readDocx, writeDocx, type Docx } from './docx';
 import { formatAnswer } from './format';
 import { insertEmptyRunAt, listParagraphs, paragraphText, runsInRange, splitAt } from './model';
-import { evaluate, isItemList, lookupFor, missingAnswers, type Lookup, type MissingAnswer } from './rules';
+import { effectiveAnswers, evaluate, isItemList, lookupFor, missingAnswers, type Lookup, type MissingAnswer } from './rules';
 import type {
   Anchor,
   Answers,
@@ -282,7 +282,8 @@ export function stripMarkers(doc: XDocument): void {
  * Applies a definition and answers to a parsed document, in place.
  * In preview mode the working markers are left for the renderer.
  */
-export function applyDefinition(docx: Docx, def: TemplateDefinition, answers: Answers, opts: GenerateOptions): void {
+export function applyDefinition(docx: Docx, def: TemplateDefinition, given: Answers, opts: GenerateOptions): void {
+  const answers = effectiveAnswers(def, given);
   if (opts.mode === 'final') {
     const missing = missingAnswers(def, answers);
     if (missing.length) throw new MissingAnswersError(missing);

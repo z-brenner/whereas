@@ -124,6 +124,54 @@ export function isVisibleGroup(g: Group, answers: Answers): boolean {
 }
 
 /**
+ * Answers with hidden questions blanked out. A question that is no longer
+ * asked must not keep steering the document with a stale answer.
+ */
+export function effectiveAnswers(def: TemplateDefinition, answers: Answers): Answers {
+  let current: Answers = { ...answers };
+  // Hiding one question can hide another, so repeat until nothing changes.
+  for (let pass = 0; pass <= def.fields.length; pass++) {
+    let changed = false;
+    const next: Answers = { ...current };
+    const top = lookupFor(current);
+    for (const f of def.fields) {
+      if (f.group) continue;
+      if (!isEmpty(top(f.id)) && !isVisibleField(f, top)) {
+        next[f.id] = null;
+        changed = true;
+      }
+    }
+    for (const g of def.groups) {
+      const list = current[g.id];
+      if (!isItemList(list)) continue;
+      if (!isVisibleGroup(g, current)) {
+        if (list.length) {
+          next[g.id] = [];
+          changed = true;
+        }
+        continue;
+      }
+      const fields = def.fields.filter((f) => f.group === g.id);
+      const cleaned = list.map((item) => {
+        const get = lookupFor(current, item);
+        let copy = item;
+        for (const f of fields) {
+          if (!isEmpty(item[f.id]) && !isVisibleField(f, get)) {
+            copy = { ...copy, [f.id]: null };
+            changed = true;
+          }
+        }
+        return copy;
+      });
+      next[g.id] = cleaned;
+    }
+    current = next;
+    if (!changed) break;
+  }
+  return current;
+}
+
+/**
  * Required questions that are visible and unanswered. `audience` limits the
  * check to what one side is expected to fill in; omit it to check everything.
  */

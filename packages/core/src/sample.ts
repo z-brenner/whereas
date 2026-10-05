@@ -116,6 +116,7 @@ export function sampleDefinition(docx: Docx): TemplateDefinition {
     groups: [
       { id: 'deliverables', label: 'Deliverables', itemLabel: 'Deliverable', min: 1, audience: 'requester' },
     ],
+    tasks: ['Confirm budget owner approval', 'Check counterparty entity details'],
     signers: [
       { id: 'company', label: 'Company', order: 1, nameField: 'company_signer_name' },
       { id: 'provider', label: 'Provider', order: 2, nameField: 'provider_signer_name', emailField: 'provider_signer_email' },
