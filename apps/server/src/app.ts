@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { ZodError } from 'zod';
 import { BlobStore } from './blobs';
 import type { Config } from './config';
@@ -21,6 +22,10 @@ export function createServices(config: Config, fetchImpl: Fetch = fetch): Servic
   };
 }
 
+const tooLarge = (limit: string) => () => {
+  throw new HttpError(413, `That upload is larger than ${limit}.`);
+};
+
 export function createApp(s: Services) {
   const api = new Hono<Env>();
 
@@ -32,6 +37,17 @@ export function createApp(s: Services) {
     }
     await next();
     c.header('Cache-Control', c.res.headers.get('Cache-Control') ?? 'no-store');
+  });
+
+  // Bodies are refused by size before they are read, signed in or not.
+  const small = bodyLimit({ maxSize: 2 * 1024 * 1024, onError: tooLarge('2 MB') });
+  const template = bodyLimit({ maxSize: 20 * 1024 * 1024, onError: tooLarge('20 MB') });
+  const signed = bodyLimit({ maxSize: 50 * 1024 * 1024, onError: tooLarge('50 MB') });
+  api.use('*', (c, next) => {
+    const path = c.req.path;
+    if (c.req.method === 'POST' && /\/templates(\/[^/]+\/document)?$/.test(path)) return template(c, next);
+    if (c.req.method === 'POST' && /\/requests\/[^/]+\/signed$/.test(path)) return signed(c, next);
+    return small(c, next);
   });
 
   api.route('/auth', authRoutes(s));

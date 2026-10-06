@@ -1,4 +1,6 @@
 import {
+  cleanText,
+  defaultAnswers,
   generateDocx,
   isItemList,
   missingAnswers,
@@ -98,44 +100,52 @@ function coerce(field: Field, value: unknown): AnswerValue {
       return list.filter((v) => field.options?.some((o) => o.value === v));
     }
     default:
-      return String(value);
+      return cleanText(String(value));
   }
 }
 
 /**
  * Merges incoming answers into the stored ones, keeping only questions the
- * template defines and that this person is allowed to answer.
+ * template defines and that this person is allowed to answer. Questions in
+ * a repeating group follow the group's audience, not their own.
  */
 export function mergeAnswers(def: TemplateDefinition, existing: Answers, incoming: Answers, legal: boolean): Answers {
   const out: Answers = { ...existing };
   for (const f of def.fields) {
-    if (f.group || !(f.id in incoming)) continue;
+    if (f.group || !Object.hasOwn(incoming, f.id)) continue;
     if (!legal && f.audience !== 'requester') continue;
     out[f.id] = coerce(f, incoming[f.id]);
   }
   for (const g of def.groups) {
-    const list = incoming[g.id];
+    const list = Object.hasOwn(incoming, g.id) ? incoming[g.id] : undefined;
     if (!isItemList(list)) continue;
     if (!legal && g.audience !== 'requester') continue;
     const fields = def.fields.filter((f) => f.group === g.id);
     out[g.id] = list.slice(0, g.max ?? 200).map((item) => {
       const clean: ItemAnswers = {};
-      for (const f of fields) clean[f.id] = coerce(f, item[f.id]);
+      for (const f of fields) clean[f.id] = coerce(f, Object.hasOwn(item, f.id) ? item[f.id] : undefined);
       return clean;
     });
   }
   return out;
 }
 
-function defaults(def: TemplateDefinition): Answers {
-  const out: Answers = {};
-  for (const f of def.fields) if (!f.group && f.defaultValue !== undefined) out[f.id] = f.defaultValue;
-  return out;
-}
-
 export function requestRoutes(s: Services) {
   const app = new Hono<Env>();
   const { db } = s;
+
+  /**
+   * Signature steps wait on a provider, so two of them could interleave on
+   * one request. Each runs alone per request and re-reads the row first.
+   */
+  const locks = new Map<string, Promise<unknown>>();
+  const withLock = <T>(requestId: string, fn: () => Promise<T>): Promise<T> => {
+    const run = (locks.get(requestId) ?? Promise.resolve()).then(fn, fn);
+    const tail = run.catch(() => undefined);
+    locks.set(requestId, tail);
+    void tail.then(() => locks.get(requestId) === tail && locks.delete(requestId));
+    return run;
+  };
 
   const getRow = (id: string): RequestRow => {
     const row = db.prepare('SELECT * FROM requests WHERE id = ?').get(id) as RequestRow | undefined;
@@ -257,7 +267,7 @@ export function requestRoutes(s: Services) {
     // The request keeps this exact version, even if the template changes later.
     const version = getVersion(template.published_version_id);
     const def = JSON.parse(version.definition) as TemplateDefinition;
-    const answers = mergeAnswers(def, defaults(def), body.answers as Answers, isLegal(user));
+    const answers = mergeAnswers(def, defaultAnswers(def), body.answers as Answers, isLegal(user));
     const id = newId();
     const t = now();
     db.transaction(() => {
@@ -334,7 +344,8 @@ export function requestRoutes(s: Services) {
       },
       can: {
         editAsRequester: mine && (row.status === 'draft' || row.status === 'returned'),
-        editAsLegal: legal && reviewable,
+        // Someone in legal can answer legal's questions on their own draft too.
+        editAsLegal: legal && (reviewable || (mine && (row.status === 'draft' || row.status === 'returned'))),
         submit: mine && (row.status === 'draft' || row.status === 'returned'),
         assign: legal && OPEN.includes(row.status),
         returnToRequester: legal && reviewable,
@@ -366,7 +377,7 @@ export function requestRoutes(s: Services) {
       .parse(await c.req.json());
     const legal = isLegal(user);
     const asRequester = row.requester_id === user.id && (row.status === 'draft' || row.status === 'returned');
-    const asLegal = legal && (row.status === 'submitted' || row.status === 'in_review');
+    const asLegal = legal && (row.status === 'submitted' || row.status === 'in_review' || asRequester);
 
     db.transaction(() => {
       if (body.answers || body.title) {
@@ -397,6 +408,10 @@ export function requestRoutes(s: Services) {
         db.prepare('UPDATE requests SET owner_id = ? WHERE id = ?').run(body.ownerId, row.id);
         if (body.ownerId && row.status === 'submitted') {
           db.prepare("UPDATE requests SET status = 'in_review' WHERE id = ?").run(row.id);
+        }
+        // With no owner it goes back to the shared queue, or nobody would see it.
+        if (!body.ownerId && row.status === 'in_review') {
+          db.prepare("UPDATE requests SET status = 'submitted' WHERE id = ?").run(row.id);
         }
         log(row.id, user.id, 'assigned', { owner: userName(body.ownerId) });
       }
@@ -440,7 +455,7 @@ export function requestRoutes(s: Services) {
     return c.json({ ok: true });
   });
 
-  app.post('/requests/:id/cancel', async (c) => {
+  app.post('/requests/:id/cancel', (c) => withLock(c.req.param('id'), async () => {
     const user = c.get('user');
     const { row } = load(c.req.param('id'), user);
     if (!isLegal(user) && row.requester_id !== user.id) throw new HttpError(403, 'Only the requester or legal can cancel this.');
@@ -463,7 +478,7 @@ export function requestRoutes(s: Services) {
       log(row.id, user.id, 'cancelled', providerNote ? { note: providerNote } : {});
     })();
     return c.json({ ok: true, warning: providerNote });
-  });
+  }));
 
   app.post('/requests/:id/comments', async (c) => {
     const user = c.get('user');
@@ -589,7 +604,7 @@ export function requestRoutes(s: Services) {
 
   // ---- signature ---------------------------------------------------------
 
-  app.post('/requests/:id/send', requireLegal, async (c) => {
+  app.post('/requests/:id/send', requireLegal, (c) => withLock(c.req.param('id'), async () => {
     const user = c.get('user');
     const { row, version, def, answers } = load(c.req.param('id'), user);
     const body = z
@@ -635,7 +650,7 @@ export function requestRoutes(s: Services) {
       log(row.id, user.id, 'sent_for_signature', { provider: body.provider });
     })();
     return c.json({ ok: true });
-  });
+  }));
 
   /** Applies a new provider status. Returns true when something changed. */
   const applySignature = async (
@@ -646,7 +661,10 @@ export function requestRoutes(s: Services) {
   ): Promise<boolean> => {
     if (status === row.signature_status) return false;
     const pdf = status === 'signed' && signedPdf ? await signedPdf() : null;
-    db.transaction(() => {
+    return db.transaction(() => {
+      // The request may have been cancelled or closed while the provider answered.
+      const current = getRow(row.id);
+      if (current.status !== 'awaiting_signature' || current.signature_ref !== row.signature_ref) return false;
       if (status === 'signed') {
         if (pdf) addDocument(row.id, 'signed', `${displayId(row.number)} ${row.title} (signed).pdf`, pdf, 'application/pdf', actorId);
         db.prepare("UPDATE requests SET signature_status = 'signed', status = 'completed', completed_at = ? WHERE id = ?").run(now(), row.id);
@@ -659,28 +677,29 @@ export function requestRoutes(s: Services) {
         db.prepare('UPDATE requests SET signature_status = ? WHERE id = ?').run(status, row.id);
         log(row.id, actorId, 'signature_progress', { status });
       }
+      return true;
     })();
-    return true;
   };
 
-  const sync = async (row: RequestRow, actorId: string | null): Promise<boolean> => {
+  const sync = (id: string, actorId: string | null): Promise<boolean> => withLock(id, async () => {
+    const row = getRow(id);
     if (row.status !== 'awaiting_signature' || !row.signature_provider || !row.signature_ref) return false;
     if (row.signature_provider === 'manual') return false;
     const provider = getProvider(row.signature_provider, readSignatureSettings(db, s.box), s.fetch);
     const result = await provider.status(row.signature_ref);
     return applySignature(row, result.status, result.signedPdf, actorId);
-  };
+  });
 
   app.post('/requests/:id/signature/refresh', requireLegal, async (c) => {
     const { row } = load(c.req.param('id'), c.get('user'));
     try {
-      return c.json({ changed: await sync(row, null) });
+      return c.json({ changed: await sync(row.id, null) });
     } catch (e) {
       throw new HttpError(502, `Could not check the signature status. ${(e as Error).message}`);
     }
   });
 
-  app.post('/requests/:id/signature/cancel', requireLegal, async (c) => {
+  app.post('/requests/:id/signature/cancel', requireLegal, (c) => withLock(c.req.param('id'), async () => {
     const user = c.get('user');
     const { row } = load(c.req.param('id'), user);
     if (row.status !== 'awaiting_signature') throw new HttpError(409, 'This request is not out for signature.');
@@ -693,18 +712,27 @@ export function requestRoutes(s: Services) {
     }
     await applySignature(row, 'voided', undefined, user.id);
     return c.json({ ok: true });
-  });
+  }));
 
   // A signed copy from anywhere closes the request: wet ink, or a tool Whereas does not talk to.
   app.post('/requests/:id/signed', requireLegal, async (c) => {
+    const bytes = new Uint8Array(await c.req.arrayBuffer());
+    if (bytes.length === 0) throw new HttpError(400, 'Choose the signed document to upload.');
+    return withLock(c.req.param('id'), async () => {
     const user = c.get('user');
     const { row } = load(c.req.param('id'), user);
     if (!['submitted', 'in_review', 'awaiting_signature'].includes(row.status)) {
       throw new HttpError(409, 'A signed copy cannot be added to this request now.');
     }
-    const bytes = new Uint8Array(await c.req.arrayBuffer());
-    if (bytes.length === 0) throw new HttpError(400, 'Choose the signed document to upload.');
-    if (bytes.length > 50 * 1024 * 1024) throw new HttpError(413, 'That file is larger than 50 MB.');
+    // A copy signed elsewhere replaces the provider's envelope, so withdraw it.
+    let warning: string | undefined;
+    if (row.status === 'awaiting_signature' && row.signature_provider && row.signature_provider !== 'manual' && row.signature_ref) {
+      try {
+        await getProvider(row.signature_provider, readSignatureSettings(db, s.box), s.fetch).cancel(row.signature_ref);
+      } catch (e) {
+        warning = `The request sent through the provider could not be withdrawn automatically: ${(e as Error).message}`;
+      }
+    }
     const filename = c.req.query('filename') ?? `${displayId(row.number)} ${row.title} (signed).pdf`;
     const isPdf = bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46;
     db.transaction(() => {
@@ -713,9 +741,10 @@ export function requestRoutes(s: Services) {
         `UPDATE requests SET signature_status = 'signed', status = 'completed', completed_at = ?,
            signature_provider = COALESCE(signature_provider, 'manual'), owner_id = COALESCE(owner_id, ?) WHERE id = ?`,
       ).run(now(), user.id, row.id);
-      log(row.id, user.id, 'signed', { uploaded: true });
+      log(row.id, user.id, 'signed', { uploaded: true, ...(warning ? { note: warning } : {}) });
     })();
-    return c.json({ ok: true });
+    return c.json({ ok: true, warning });
+    });
   });
 
   /** Checks every request that is out with a provider. Run on a timer. */
@@ -725,7 +754,7 @@ export function requestRoutes(s: Services) {
       .all() as RequestRow[];
     for (const row of rows) {
       try {
-        await sync(row, null);
+        await sync(row.id, null);
       } catch (e) {
         console.error(`Signature check failed for ${displayId(row.number)}: ${(e as Error).message}`);
       }

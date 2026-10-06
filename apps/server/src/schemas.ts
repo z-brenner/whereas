@@ -50,7 +50,7 @@ const group = z.object({
   visibleWhen: rule.optional(),
 });
 
-const base = { id: z.string().min(1).max(64), range };
+const base = { id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), range };
 const anchor = z.discriminatedUnion('kind', [
   z.object({
     ...base,

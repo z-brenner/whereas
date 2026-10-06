@@ -3,6 +3,7 @@ import type { Docx } from './docx';
 import { listParagraphs, paragraphText } from './model';
 import { ruleFields } from './rules';
 import type { Anchor, TemplateDefinition } from './types';
+import { wChild } from './xml';
 
 export interface Problem {
   message: string;
@@ -45,6 +46,14 @@ export function validateDefinition(docx: Docx, def: TemplateDefinition): Problem
     }
   }
 
+  const ids = new Set<string>();
+  for (const a of def.anchors) {
+    // Ids become space-separated tokens while generating, so they must be plain.
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(a.id)) problems.push({ anchor: a.id, message: 'A mark has an invalid id.' });
+    if (ids.has(a.id)) problems.push({ anchor: a.id, message: 'Two marks share the same id.' });
+    ids.add(a.id);
+  }
+
   const repeats = def.anchors.filter((a) => a.kind === 'repeat');
   const blockSpan = new Map<string, { start: number; end: number }>();
 
@@ -62,12 +71,25 @@ export function validateDefinition(docx: Docx, def: TemplateDefinition): Problem
           problems.push({ anchor: a.id, message: 'A block must cover whole paragraphs or whole table rows.' });
         }
         blockSpan.set(a.id, covered);
+        if (a.kind === 'repeat') {
+          for (let i = covered.start; i <= covered.end; i++) {
+            const pPr = wChild(paragraphs[i]!, 'pPr');
+            if (pPr && wChild(pPr, 'sectPr')) {
+              problems.push({ anchor: a.id, message: 'A repeating block cannot include a section break.' });
+              break;
+            }
+          }
+        }
       } catch (e) {
         problems.push({ anchor: a.id, message: (e as Error).message });
       }
     } else {
       if (start.p !== end.p) {
         problems.push({ anchor: a.id, message: `"${a.range.quote}" spans more than one paragraph.` });
+        continue;
+      }
+      if (start.o < 0 || end.o < start.o || end.o > texts[start.p]!.length) {
+        problems.push({ anchor: a.id, message: 'A mark points outside its paragraph.' });
         continue;
       }
       if (texts[start.p]!.slice(start.o, end.o) !== a.range.quote) {
@@ -129,6 +151,20 @@ export function validateDefinition(docx: Docx, def: TemplateDefinition): Problem
       const b = blockSpan.get(repeats[j]!.id);
       if (a && b && a.start <= b.end && b.start <= a.end) {
         problems.push({ anchor: repeats[j]!.id, message: 'Repeating blocks cannot overlap or nest.' });
+      }
+    }
+  }
+  // A conditional block sits wholly inside a repeat, or wholly outside it.
+  for (const c of def.anchors) {
+    if (c.kind !== 'conditional' || !c.block) continue;
+    const cs = blockSpan.get(c.id);
+    for (const r of repeats) {
+      const rs = blockSpan.get(r.id);
+      if (!cs || !rs || cs.end < rs.start || rs.end < cs.start) continue;
+      const inside = rs.start <= cs.start && cs.end <= rs.end;
+      const around = cs.start <= rs.start && rs.end <= cs.end;
+      if (!inside && !around) {
+        problems.push({ anchor: c.id, message: 'A conditional block cannot straddle the edge of a repeating block.' });
       }
     }
   }

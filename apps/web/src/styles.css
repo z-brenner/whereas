@@ -1,0 +1,213 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/hanken-grotesk';
+@import '@fontsource/libre-caslon-text/400.css';
+@import '@fontsource/libre-caslon-text/400-italic.css';
+@import '@fontsource/libre-caslon-text/700.css';
+
+@theme {
+  --font-sans: 'Hanken Grotesk Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-serif: 'Libre Caslon Text', Georgia, 'Times New Roman', serif;
+
+  /* Ink on paper, on a desk. The only loud colours are the highlighters. */
+  --color-ink: #14263a;
+  --color-ink-soft: #33465a;
+  --color-muted: #5c6874;
+  --color-desk: #eceeea;
+  --color-desk-deep: #e1e5de;
+  --color-paper: #ffffff;
+  --color-line: #d5dad3;
+  --color-line-soft: #e6e9e3;
+  --color-wax: #a12b2b;
+  --color-wax-soft: #f9e9e7;
+
+  --color-mark-field: #ffe873;
+  --color-mark-conditional: #b9dcff;
+  --color-mark-alternatives: #dccdff;
+  --color-mark-repeat: #bfeac6;
+  --color-mark-signature: #ffc8dc;
+}
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    color: var(--color-ink);
+    background: var(--color-desk);
+    -webkit-font-smoothing: antialiased;
+    font-size: 14px;
+  }
+  body {
+    margin: 0;
+    min-height: 100vh;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-ink);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+  ::selection {
+    background: color-mix(in srgb, var(--color-ink) 22%, transparent);
+  }
+  dialog::backdrop {
+    background: color-mix(in srgb, var(--color-ink) 35%, transparent);
+  }
+  button {
+    cursor: pointer;
+  }
+  button:disabled {
+    cursor: not-allowed;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      animation: none !important;
+      transition: none !important;
+    }
+  }
+}
+
+/* ---- the document ------------------------------------------------------ */
+
+.doc-page {
+  background: var(--color-paper);
+  color: #111;
+  box-shadow:
+    0 0 0 1px var(--color-line),
+    0 12px 28px -18px rgb(20 38 58 / 0.35);
+  border-radius: 2px;
+  font-family: 'Times New Roman', Times, 'Liberation Serif', serif;
+  font-size: 11pt;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.doc-page p {
+  margin: 0;
+  white-space: pre-wrap;
+  tab-size: 36pt;
+  min-height: 1.2em;
+}
+.doc-page table {
+  border-collapse: collapse;
+  width: 100%;
+  table-layout: fixed;
+}
+.doc-page td {
+  vertical-align: top;
+  padding: 2pt 5pt;
+}
+.doc-page table.bordered td {
+  border: 0.75pt solid #222;
+}
+.doc-label {
+  display: inline-block;
+  text-indent: 0;
+  user-select: none;
+  white-space: pre;
+}
+.doc-break {
+  border: 0;
+  border-top: 1px dashed var(--color-line);
+  margin: 18pt -8pt;
+}
+
+/* Highlighter marks: what a question, condition or signature touches. */
+.mark {
+  border-radius: 2px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  padding: 1px 0;
+  cursor: pointer;
+}
+.mark-field {
+  background: var(--color-mark-field);
+}
+.mark-alternatives {
+  background: var(--color-mark-alternatives);
+}
+.mark-signature {
+  background: var(--color-mark-signature);
+}
+.mark-conditional {
+  background: color-mix(in srgb, var(--color-mark-conditional) 55%, transparent);
+  border-bottom: 2px solid #5fa8ec;
+}
+.word-highlight {
+  /* Highlighting from Word hints at a placeholder without posing as a mark. */
+  text-decoration: underline dotted #9aa3ab;
+  text-underline-offset: 2px;
+}
+.mark-selected {
+  outline: 2px solid var(--color-ink);
+  outline-offset: 1px;
+}
+.mark-filled {
+  background: color-mix(in srgb, var(--color-mark-field) 45%, transparent);
+  cursor: default;
+}
+.mark-empty {
+  background: var(--color-mark-field);
+  outline: 1px dashed #b89b00;
+  cursor: default;
+}
+
+.doc-page p.block-conditional,
+.doc-page p.block-repeat {
+  position: relative;
+}
+/* The bar and its tag sit in the page margin, clear of any list number. */
+.doc-page p.block-conditional::before,
+.doc-page p.block-repeat::before {
+  content: '';
+  position: absolute;
+  left: calc(-1 * var(--indent, 0pt) - 12pt);
+  top: -1pt;
+  bottom: -1pt;
+  width: 3pt;
+  border-radius: 2px;
+}
+.doc-page p.block-conditional::before {
+  background: #5fa8ec;
+}
+.doc-page p.block-repeat::before {
+  background: #58b96a;
+}
+.doc-page p.block-conditional {
+  background: color-mix(in srgb, var(--color-mark-conditional) 28%, transparent);
+}
+.doc-page p.block-repeat {
+  background: color-mix(in srgb, var(--color-mark-repeat) 32%, transparent);
+}
+/* A pseudo-element on a table row would become an extra cell. */
+tr.block-conditional > td {
+  background: color-mix(in srgb, var(--color-mark-conditional) 28%, transparent);
+}
+tr.block-repeat > td {
+  background: color-mix(in srgb, var(--color-mark-repeat) 32%, transparent);
+}
+tr.block-conditional > td:first-child {
+  box-shadow: inset 3pt 0 0 #5fa8ec;
+}
+tr.block-repeat > td:first-child {
+  box-shadow: inset 3pt 0 0 #58b96a;
+}
+.doc-page p.block-conditional,
+.doc-page p.block-repeat,
+tr.block-conditional,
+tr.block-repeat {
+  cursor: pointer;
+}
+.block-selected {
+  outline: 2px solid var(--color-ink);
+  outline-offset: 2px;
+}
+.block-tag {
+  position: absolute;
+  right: calc(100% + var(--indent, 0pt) + 16pt);
+  top: 1pt;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: nowrap;
+  text-indent: 0;
+  user-select: none;
+  color: var(--color-ink-soft);
+  cursor: pointer;
+}

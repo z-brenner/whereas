@@ -34,6 +34,20 @@ export function formatDate(iso: string, format: DateFormat = 'long'): string {
   }
 }
 
+/**
+ * Makes text safe to place in a document. Pasted text often carries Word's
+ * vertical-tab line break or other control characters that XML forbids, and
+ * a single one would make the whole file unreadable.
+ */
+export function cleanText(text: string): string {
+  return text
+    .replace(/\r\n?/g, '\n')
+    .replace(/[\u000B\u000C\u2028\u2029]/g, '\n')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u0008\u000E-\u001F\uFFFE\uFFFF]/g, '')
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '');
+}
+
 function groupThousands(int: string): string {
   return int.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }

@@ -5,8 +5,8 @@ export type Lookup = (fieldId: string) => AnswerValue | undefined;
 
 export function lookupFor(answers: Answers, item?: ItemAnswers): Lookup {
   return (id) => {
-    if (item && id in item) return item[id];
-    const v = answers[id];
+    if (item && Object.hasOwn(item, id)) return item[id];
+    const v = Object.hasOwn(answers, id) ? answers[id] : undefined;
     return isItemList(v) ? undefined : (v as AnswerValue | undefined);
   };
 }
@@ -123,6 +123,13 @@ export function isVisibleGroup(g: Group, answers: Answers): boolean {
   return evaluate(g.visibleWhen, lookupFor(answers));
 }
 
+/** The answers a new request starts with. */
+export function defaultAnswers(def: TemplateDefinition): Answers {
+  const out: Answers = {};
+  for (const f of def.fields) if (!f.group && f.defaultValue !== undefined) out[f.id] = f.defaultValue;
+  return out;
+}
+
 /**
  * Answers with hidden questions blanked out. A question that is no longer
  * asked must not keep steering the document with a stale answer.
@@ -180,6 +187,7 @@ export function missingAnswers(
   answers: Answers,
   audience?: 'requester' | 'legal',
 ): MissingAnswer[] {
+  answers = effectiveAnswers(def, answers);
   const out: MissingAnswer[] = [];
   const top = lookupFor(answers);
   for (const f of def.fields) {

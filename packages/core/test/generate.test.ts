@@ -181,3 +181,61 @@ describe('validation', () => {
     expect(problems.some((p) => p.message.includes('no longer matches'))).toBe(true);
   });
 });
+
+describe('hostile and awkward input', () => {
+  const template = new Uint8Array(readFileSync(join(FIXTURES, variants[0]!)));
+  const docx = readDocx(template);
+  const def = sampleDefinition(docx);
+
+  it('keeps the document readable when an answer carries control characters', () => {
+    const answers: Answers = { ...sampleAnswers, counterparty_name: 'North\u000Bwind\u0001 \uD800LLC\r\nInc' };
+    const out = generateDocx(template, def, answers);
+    const text = textOf(out).join('|');
+    expect(text).toContain('North\nwind LLC\nInc');
+    const xml = new TextDecoder().decode(readDocx(out).files['word/document.xml']);
+    // eslint-disable-next-line no-control-regex
+    expect(xml).not.toMatch(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/);
+  });
+
+  it('treats answers named like built-in properties as ordinary answers', () => {
+    const law = def.anchors.find((a) => a.id === 'a_law')!;
+    const odd = {
+      ...def,
+      fields: [...def.fields, { id: 'constructor', label: 'Constructor', type: 'text' as const, required: true, audience: 'requester' as const }],
+      anchors: def.anchors.map((a) => (a.id === 'a_law' ? { ...law, field: 'constructor' } : a)),
+    };
+    expect(() => generateDocx(template, odd, sampleAnswers)).toThrow(MissingAnswersError);
+    const text = textOf(generateDocx(template, odd, { ...sampleAnswers, constructor: 'Ohio' } as Answers)).join('\n');
+    expect(text).toContain('laws of Ohio,');
+    const termAnswer = { ...sampleAnswers, term_length: 'constructor' } as Answers;
+    expect(() => generateDocx(template, def, termAnswer)).not.toThrow();
+  });
+
+  it('rejects duplicate, malformed and out-of-range marks', () => {
+    const cp = def.anchors.find((a) => a.id === 'a_cp')!;
+    const messages = (anchors: typeof def.anchors) => validateDefinition(docx, { ...def, anchors }).map((p) => p.message).join('|');
+    expect(messages([...def.anchors, { ...cp }])).toContain('share the same id');
+    expect(messages([...def.anchors.filter((a) => a.id !== 'a_cp'), { ...cp, id: 'has space' }])).toContain('invalid id');
+    const outside = { ...cp, id: 'far', range: { start: { p: cp.range.start.p, o: 9000 }, end: { p: cp.range.start.p, o: 9000 }, quote: '' } };
+    expect(messages([...def.anchors, outside])).toContain('outside its paragraph');
+  });
+
+  it('removes an insertion point along with the words around it', () => {
+    const dpa = def.anchors.find((a) => a.id === 'c_dpa')!;
+    const point = { p: dpa.range.start.p, o: dpa.range.start.o + 4 };
+    const insert = { id: 'ins', kind: 'field' as const, field: 'counterparty_name', range: { start: point, end: point, quote: '' } };
+    const withInsert = { ...def, anchors: [...def.anchors, insert] };
+    expect(validateDefinition(docx, withInsert)).toEqual([]);
+    const hidden = textOf(generateDocx(template, withInsert, { ...sampleAnswers, data_categories: ['contact'] })).join('\n');
+    expect(hidden).toContain('documented instructions.');
+    const shown = textOf(generateDocx(template, withInsert, sampleAnswers)).join('\n');
+    expect(shown).toContain('instructions andNorthwind Analytics LLC in line with');
+  });
+
+  it('refuses an archive that expands far beyond a real document', async () => {
+    const { zipSync } = await import('fflate');
+    const bomb = zipSync({ 'word/document.xml': new Uint8Array(70 * 1024 * 1024) }, { level: 9 });
+    expect(bomb.length).toBeLessThan(1024 * 1024);
+    expect(() => readDocx(bomb)).toThrow('too large');
+  });
+});

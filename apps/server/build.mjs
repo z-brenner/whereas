@@ -9,7 +9,7 @@ await build({
   target: 'node22',
   outfile: 'dist/server.js',
   external: ['better-sqlite3'],
-  banner: { js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" },
+  banner: { js: "import { createRequire as __whereasRequire } from 'node:module'; const require = __whereasRequire(import.meta.url);" },
 });
 mkdirSync('dist/assets', { recursive: true });
 cpSync('../../fixtures/services-agreement.docx', 'dist/assets/services-agreement.docx');

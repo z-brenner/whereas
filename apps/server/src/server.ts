@@ -32,6 +32,9 @@ const stop = () => {
     services.db.close();
     process.exit(0);
   });
+  // Idle keep-alive connections would otherwise hold the port open.
+  (server as { closeIdleConnections?: () => void }).closeIdleConnections?.();
+  setTimeout(() => process.exit(0), 5000).unref();
 };
 process.on('SIGINT', stop);
 process.on('SIGTERM', stop);

@@ -1,6 +1,6 @@
 import { blockUnits, removeUnit } from './blocks';
 import { cloneDocx, readDocx, writeDocx, type Docx } from './docx';
-import { formatAnswer } from './format';
+import { cleanText, formatAnswer } from './format';
 import { insertEmptyRunAt, listParagraphs, paragraphText, runsInRange, splitAt } from './model';
 import { effectiveAnswers, evaluate, isItemList, lookupFor, missingAnswers, type Lookup, type MissingAnswer } from './rules';
 import type {
@@ -104,8 +104,19 @@ function materialize(doc: XDocument, def: TemplateDefinition): void {
     const p = paragraphs[a.range.start.p]!;
     const { o: start } = a.range.start;
     const { o: end } = a.range.end;
-    const runs = start === end ? [insertEmptyRunAt(p, start)] : runsInRange(p, start, end);
-    for (const run of runs) addToken(run, ATTR.tags, a.id);
+    if (start !== end) {
+      for (const run of runsInRange(p, start, end)) addToken(run, ATTR.tags, a.id);
+      continue;
+    }
+    // An insertion point has no text of its own, so it takes on whatever
+    // surrounds it: if that text is removed, the insertion goes with it.
+    const run = insertEmptyRunAt(p, start);
+    addToken(run, ATTR.tags, a.id);
+    for (const b of inline) {
+      if (b !== a && b.range.start.p === a.range.start.p && b.range.start.o <= start && start < b.range.end.o) {
+        addToken(run, ATTR.tags, b.id);
+      }
+    }
   }
   for (const a of def.anchors) {
     if (!isBlock(a)) continue;
@@ -124,7 +135,8 @@ function scopeOf(el: XElement, answers: Answers): ItemAnswers | undefined {
     const scope = n.getAttribute(ATTR.scope);
     if (scope) {
       const cut = scope.lastIndexOf(':');
-      const list = answers[scope.slice(0, cut)];
+      const group = scope.slice(0, cut);
+      const list = Object.hasOwn(answers, group) ? answers[group] : undefined;
       return isItemList(list) ? (list[Number(scope.slice(cut + 1))] ?? {}) : {};
     }
   }
@@ -141,7 +153,7 @@ function expandRepeats(root: XElement, def: TemplateDefinition, answers: Answers
     const units = findWithToken(root, ATTR.block, a.id);
     const first = units[0];
     if (!first) continue;
-    const list = answers[a.group];
+    const list = Object.hasOwn(answers, a.group) ? answers[a.group] : undefined;
     let count = isItemList(list) ? list.length : 0;
     // An empty preview still shows the block once so its fields are visible.
     if (count === 0 && preview) count = 1;
@@ -210,7 +222,7 @@ function buildRun(model: XElement, anchor: Anchor, r: Replacement, preview: bool
   }
   if (props.firstChild) run.appendChild(props);
 
-  const lines = r.text.split('\n');
+  const lines = cleanText(String(r.text)).split('\n');
   lines.forEach((line, i) => {
     if (i > 0) run.appendChild(createW(doc, 'br'));
     line.split('\t').forEach((piece, j) => {
@@ -253,7 +265,7 @@ function applyReplacements(root: XElement, def: TemplateDefinition, answers: Ans
       } else if (a.kind === 'alternatives') {
         const value = get(a.field);
         const key = Array.isArray(value) ? (value[0] ?? '') : String(value ?? '');
-        const text = a.variants[key] ?? a.otherwise ?? '';
+        const text = (Object.hasOwn(a.variants, key) ? a.variants[key] : undefined) ?? a.otherwise ?? '';
         const unanswered = value === undefined || value === null || value === '';
         r = unanswered && preview ? { text: `[${fields.get(a.field)?.label ?? 'Choose wording'}]`, empty: true } : { text };
       } else {

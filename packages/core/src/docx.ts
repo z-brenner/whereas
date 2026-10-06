@@ -2,6 +2,11 @@ import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { parseXml, serializeXml, type XDocument } from './xml';
 
 const DOCUMENT = 'word/document.xml';
+const MAX_ENTRIES = 5000;
+const MAX_PART = 64 * 1024 * 1024;
+const MAX_TOTAL = 192 * 1024 * 1024;
+
+export class DocxError extends Error {}
 
 /** An unzipped DOCX. Parts other than the main document are kept as bytes. */
 export interface Docx {
@@ -9,13 +14,24 @@ export interface Docx {
   document: XDocument;
 }
 
-export class DocxError extends Error {}
 
 export function readDocx(bytes: Uint8Array): Docx {
   let files: Record<string, Uint8Array>;
+  let total = 0;
+  let entries = 0;
   try {
-    files = unzipSync(bytes);
-  } catch {
+    files = unzipSync(bytes, {
+      // Refuse archives that expand far beyond any real agreement.
+      filter: (file) => {
+        total += file.originalSize;
+        if (++entries > MAX_ENTRIES || file.originalSize > MAX_PART || total > MAX_TOTAL) {
+          throw new DocxError('This document is too large to use as a template.');
+        }
+        return true;
+      },
+    });
+  } catch (e) {
+    if (e instanceof DocxError) throw e;
     throw new DocxError('This file is not a Word document (.docx).');
   }
   const main = files[DOCUMENT];

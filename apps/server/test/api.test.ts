@@ -331,3 +331,71 @@ describe('manual signing and cancelling', () => {
     expect((await admin.json('PATCH', `/users/${me}`, { role: 'legal' })).status).toBe(409);
   });
 });
+
+describe('hardening', () => {
+  it('refuses oversized bodies before reading them', async () => {
+    const big = new Uint8Array(3 * 1024 * 1024);
+    const res = await app.request('/api/auth/login', { method: 'POST', headers: { 'X-Whereas': '1', 'Content-Type': 'application/json', 'Content-Length': String(big.length) }, body: big });
+    expect(res.status).toBe(413);
+  });
+
+  it('rejects marks with unsafe ids', async () => {
+    const detail = await admin.json('GET', `/templates/${templateId}`);
+    const anchors = detail.body.definition.anchors.map((a: any, i: number) => (i === 0 ? { ...a, id: 'has space' } : a));
+    const res = await admin.json('PUT', `/templates/${templateId}`, { name: 'x', description: '', definition: { ...detail.body.definition, anchors } });
+    expect(res.status).toBe(400);
+  });
+
+  it('strips control characters from answers', async () => {
+    const created = await admin.json('POST', '/requests', { templateId, title: 'Pasted', answers: { counterparty_name: 'Acme\u000BCo\u0001' } });
+    const detail = await admin.json('GET', `/requests/${created.body.id}`);
+    expect(detail.body.answers.counterparty_name).toBe('Acme\nCo');
+  });
+
+  it('returns an unassigned request to the shared queue', async () => {
+    const me = (await admin.json('GET', '/me')).body.id;
+    const created = await admin.json('POST', '/requests', { templateId, title: 'Queue', answers: { ...sampleAnswers } });
+    const id = created.body.id;
+    await admin.json('POST', `/requests/${id}/submit`);
+    await admin.json('PATCH', `/requests/${id}`, { ownerId: me });
+    await admin.json('PATCH', `/requests/${id}`, { ownerId: null });
+    expect((await admin.json('GET', `/requests/${id}`)).body.status).toBe('submitted');
+    expect((await admin.json('GET', '/requests?view=todo')).body.some((r: any) => r.id === id)).toBe(true);
+  });
+
+  it('sends once when two people press send together, and ignores a late status after cancelling', async () => {
+    seal.status = 'pending';
+    seal.submitters = 'sent';
+    const created = await admin.json('POST', '/requests', { templateId, title: 'Race', answers: { ...sampleAnswers } });
+    const id = created.body.id;
+    await admin.json('POST', `/requests/${id}/submit`);
+    const signers = { company: { name: 'M', email: 'm@acme.test' }, provider: { name: 'D', email: 'd@northwind.example' } };
+    const before = seal.calls.filter((c) => c.url.endsWith('/submissions/docx')).length;
+    const [a, b] = await Promise.all([
+      admin.json('POST', `/requests/${id}/send`, { provider: 'docuseal', signers }),
+      admin.json('POST', `/requests/${id}/send`, { provider: 'docuseal', signers }),
+    ]);
+    expect([a.status, b.status].sort()).toEqual([200, 409]);
+    expect(seal.calls.filter((c) => c.url.endsWith('/submissions/docx')).length).toBe(before + 1);
+
+    // A status check and a cancel overlap; the cancel must stand.
+    seal.submitters = 'opened';
+    const [, cancelled] = await Promise.all([syncSignatures(), admin.json('POST', `/requests/${id}/cancel`)]);
+    expect(cancelled.status).toBe(200);
+    await syncSignatures();
+    expect((await admin.json('GET', `/requests/${id}`)).body).toMatchObject({ status: 'cancelled', signatureStatus: 'voided' });
+  });
+
+  it('withdraws the provider request when a signed copy is uploaded instead', async () => {
+    seal.status = 'pending';
+    seal.submitters = 'sent';
+    const created = await admin.json('POST', '/requests', { templateId, title: 'Wet ink', answers: { ...sampleAnswers } });
+    const id = created.body.id;
+    await admin.json('POST', `/requests/${id}/submit`);
+    await admin.json('POST', `/requests/${id}/send`, { provider: 'docuseal', signers: { company: { name: 'M', email: 'm@acme.test' }, provider: { name: 'D', email: 'd@northwind.example' } } });
+    const deletes = seal.calls.filter((c) => c.method === 'DELETE').length;
+    const res = await admin.call('POST', `/requests/${id}/signed`, undefined, new TextEncoder().encode('%PDF-1.4'));
+    expect(res.status).toBe(200);
+    expect(seal.calls.filter((c) => c.method === 'DELETE').length).toBe(deletes + 1);
+  });
+});

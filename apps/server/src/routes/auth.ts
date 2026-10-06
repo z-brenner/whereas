@@ -13,11 +13,18 @@ const SESSION_DAYS = 14;
 const password = z.string().min(10, 'Use at least 10 characters.').max(200);
 const credentials = z.object({ email: z.string().email().max(200), password: z.string().min(1).max(200) });
 
-/** Slows down password guessing: ten tries per address per quarter hour. */
+/**
+ * Slows down password guessing: ten tries per quarter hour. The count is per
+ * network address and account together, so a stranger hammering an account
+ * cannot lock its owner out from elsewhere.
+ */
 const attempts = new Map<string, { count: number; reset: number }>();
 function throttle(key: string): void {
-  const entry = attempts.get(key);
   const t = Date.now();
+  if (attempts.size > 10_000) {
+    for (const [k, v] of attempts) if (v.reset < t) attempts.delete(k);
+  }
+  const entry = attempts.get(key);
   if (!entry || entry.reset < t) {
     attempts.set(key, { count: 1, reset: t + 15 * 60_000 });
     return;
@@ -90,14 +97,16 @@ export function authRoutes(s: Services) {
 
   app.post('/login', async (c) => {
     const body = credentials.parse(await c.req.json());
-    throttle(body.email.toLowerCase());
+    const address = (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming?.socket?.remoteAddress ?? 'local';
+    const key = `${address} ${body.email.toLowerCase()}`;
+    throttle(key);
     const row = s.db.prepare('SELECT id, password_hash, disabled FROM users WHERE email = ?').get(body.email) as
       | { id: string; password_hash: string; disabled: number }
       | undefined;
     if (!row || row.disabled || !verifyPassword(body.password, row.password_hash)) {
       throw new HttpError(401, 'That email and password do not match.');
     }
-    attempts.delete(body.email.toLowerCase());
+    attempts.delete(key);
     startSession(c, row.id);
     return c.json({ ok: true });
   });
