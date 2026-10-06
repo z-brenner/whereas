@@ -98,7 +98,8 @@ export function Requests() {
   const view = (['todo', 'mine', 'all'].includes(params.get('view') ?? '') ? params.get('view') : 'todo') as View;
   const [query, setQuery] = useState('');
   const [creating, setCreating] = useState(false);
-  const list = useQuery({ queryKey: ['requests', view], queryFn: () => api.get<RequestRow[]>(`/requests?view=${view}`), refetchInterval: 30_000 });
+  // Always refetch on arrival: the list must reflect what was just done on a request.
+  const list = useQuery({ queryKey: ['requests', view], queryFn: () => api.get<RequestRow[]>(`/requests?view=${view}`), refetchInterval: 30_000, refetchOnMount: 'always' });
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();

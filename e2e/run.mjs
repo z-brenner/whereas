@@ -199,6 +199,35 @@ await page.getByRole('link', { name: 'Settings' }).click();
 await page.getByText('Requesters ask for agreements').waitFor();
 await shot('17-settings');
 
+// 6. A requester sees only what a requester needs.
+await page.getByRole('button', { name: 'Add a person' }).click();
+await page.getByLabel('Name', { exact: true }).fill('Sam Ortiz');
+await page.getByLabel('Email').fill('sam@acme.test');
+await page.getByLabel('Starting password').fill('correct horse battery');
+await page.getByRole('button', { name: 'Add person' }).click();
+await page.getByText('sam@acme.test').waitFor();
+await page.getByRole('button', { name: 'Sign out' }).click();
+await page.waitForURL('**/login');
+await page.getByLabel('Email').fill('sam@acme.test');
+await page.getByLabel('Password').fill('correct horse battery');
+await page.getByRole('button', { name: 'Sign in' }).click();
+await page.getByText('Nothing is waiting on you').waitFor();
+assert.equal(await page.getByRole('link', { name: 'Templates' }).count(), 0, 'requesters do not see templates');
+assert.equal(await page.getByRole('link', { name: 'Settings' }).count(), 0, 'requesters do not see settings');
+assert.equal(await page.getByRole('tab', { name: 'All requests' }).count(), 0, 'requesters do not see every request');
+await page.getByRole('button', { name: 'New request' }).click();
+await page.getByText('Master Services Agreement (sample)').click();
+await page.getByLabel('Name this request').fill('Vendor onboarding');
+await page.getByRole('button', { name: 'Start request' }).click();
+await page.locator('.doc-page').waitFor();
+assert.equal(await page.getByText('For legal').count(), 0, 'legal questions are hidden from requesters');
+assert.equal(await page.getByRole('button', { name: 'Word' }).count(), 0, 'requesters cannot download a draft');
+await shot('18-requester-draft');
+await page.getByRole('link', { name: 'Back to requests' }).click();
+await page.getByRole('row', { name: /Vendor onboarding/ }).waitFor();
+await page.getByRole('tab', { name: 'Requested by me' }).click();
+assert.equal(await page.getByRole('row', { name: /REQ-/ }).count(), 1, 'a requester sees only their own request');
+
 await browser.close();
 assert.deepEqual(errors, [], 'no browser errors');
 console.log('End-to-end flow passed.');
